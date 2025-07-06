@@ -1,0 +1,129 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  plan          Plan      @default(FREE)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  evaluations   Evaluation[]
+  sessions      Session[]
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  expires      DateTime
+  sessionToken String   @unique
+  accessToken  String?
+  refreshToken String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model Question {
+  id          String   @id @default(cuid())
+  title       String
+  content     String
+  subject     Subject
+  year        Int?
+  paper       String?
+  marks       Int?
+  timeLimit   Int?     // in minutes
+  keywords    String[] // Expected keywords for evaluation
+  sampleAnswer String?
+  createdAt   DateTime @default(now())
+
+  evaluations Evaluation[]
+
+  @@map("questions")
+}
+
+model Evaluation {
+  id              String   @id @default(cuid())
+  userId          String
+  questionId      String
+
+  // Image processing
+  originalImageUrl String
+  processedImageUrl String?
+  imageMetadata   Json?    // Quality, dimensions, etc.
+
+  // OCR Results
+  extractedText   String?
+  ocrProvider     String?  // google, aws, azure, tesseract
+  ocrConfidence   Float?
+  ocrMetadata     Json?
+
+  // Evaluation Scores
+  contentScore    Float?   // 0-100
+  structureScore  Float?   // 0-100
+  handwritingScore Float?  // 0-100
+  overallScore    Float?   // 0-100
+
+  // AI Feedback
+  strengths       String[]
+  improvements    String[]
+  suggestions     String[]
+  detailedFeedback String?
+
+  // Processing Status
+  status          EvaluationStatus @default(PROCESSING)
+  processingTime  Int?             // in milliseconds
+  errorMessage    String?
+
+  // Timestamps
+  createdAt       DateTime @default(now())
+  completedAt     DateTime?
+
+  user     User     @relation(fields: [userId], references: [id])
+  question Question @relation(fields: [questionId], references: [id])
+
+  @@map("evaluations")
+}
+
+model UsageStats {
+  id               String   @id @default(cuid())
+  userId           String
+  date             DateTime @default(now())
+  evaluationsCount Int      @default(0)
+
+  @@unique([userId, date])
+  @@map("usage_stats")
+}
+
+enum Plan {
+  FREE
+  PREMIUM
+  ENTERPRISE
+}
+
+enum Subject {
+  GENERAL_STUDIES_1
+  GENERAL_STUDIES_2
+  GENERAL_STUDIES_3
+  GENERAL_STUDIES_4
+  ESSAY
+  OPTIONAL_SUBJECT
+}
+
+enum EvaluationStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
