@@ -1,0 +1,2607 @@
+
+# Complete Step-by-Step Implementation Guide for UPSC Handwritten Answer Evaluation System
+
+## 📋 Project Overview
+
+Build a comprehensive AI-powered handwritten answer evaluation system for UPSC aspirants with the following capabilities:
+- Multi-provider OCR processing (Google Vision, AWS Textract, Azure OCR, Tesseract.js)
+- AI-powered content analysis and feedback generation
+- Real-time image preprocessing and quality assessment
+- Progressive Web App with offline capabilities
+- Multilingual support (English, Hindi, Regional languages)
+- Secure, privacy-compliant architecture
+
+## 🎯 Implementation Phases
+
+### Phase 1: Project Setup & Core Infrastructure (Week 1-2)
+### Phase 2: OCR Integration & Processing Pipeline (Week 3-4)
+### Phase 3: AI Evaluation Engine (Week 5-6)
+### Phase 4: Frontend & User Interface (Week 7-8)
+### Phase 5: Security, Testing & Deployment (Week 9-10)
+
+---
+
+## 🚀 PHASE 1: PROJECT SETUP & CORE INFRASTRUCTURE
+
+### Step 1.1: Initialize Next.js Project
+
+```bash
+# Create new Next.js project
+npx create-next-app@latest upsc-handwriting-eval --typescript --tailwind --eslint --app --src-dir
+
+cd upsc-handwriting-eval
+
+# Install core dependencies
+npm install @google-cloud/vision aws-sdk @azure/cognitiveservices-computervision
+npm install @prisma/client prisma postgresql
+npm install redis ioredis bull
+npm install zod @hookform/react-hook-form @hookform/resolvers
+npm install next-auth
+npm install sharp canvas opencv.js
+npm install react-dropzone react-camera-pro
+npm install @radix-ui/react-toast @radix-ui/react-progress
+npm install @genkit-ai/core @genkit-ai/googleai
+npm install tesseract.js browser-image-compression
+npm install framer-motion lucide-react
+npm install recharts date-fns
+
+# Development dependencies
+npm install -D @types/node @types/react @types/react-dom
+npm install -D jest @testing-library/react @testing-library/jest-dom
+npm install -D cypress
+npm install -D prettier eslint-config-prettier
+```
+
+### Step 1.2: Environment Configuration
+
+Create `.env.local`:
+```env
+# Database
+DATABASE_URL="postgresql://username:password@localhost:5432/upsc_eval"
+REDIS_URL="redis://localhost:6379"
+
+# Authentication
+NEXTAUTH_SECRET="your-secret-key-here"
+NEXTAUTH_URL="http://localhost:3000"
+
+# OCR Providers
+GOOGLE_APPLICATION_CREDENTIALS="./credentials/google-vision-key.json"
+GOOGLE_CLOUD_PROJECT_ID="your-project-id"
+
+AWS_ACCESS_KEY_ID="your-aws-access-key"
+AWS_SECRET_ACCESS_KEY="your-aws-secret-key"
+AWS_REGION="us-east-1"
+
+AZURE_COMPUTER_VISION_SUBSCRIPTION_KEY="your-azure-key"
+AZURE_COMPUTER_VISION_ENDPOINT="https://your-resource.cognitiveservices.azure.com/"
+
+# AI Services
+OPENAI_API_KEY="your-openai-api-key"
+GOOGLE_AI_API_KEY="your-google-ai-key"
+
+# File Storage
+AWS_S3_BUCKET="upsc-handwriting-images"
+AWS_S3_REGION="us-east-1"
+
+# Security
+ENCRYPTION_KEY="your-32-char-encryption-key"
+JWT_SECRET="your-jwt-secret"
+
+# Rate Limiting
+RATE_LIMIT_MAX_REQUESTS="1000"
+RATE_LIMIT_WINDOW_MS="3600000"
+```
+
+### Step 1.3: Database Schema Setup
+
+Create `prisma/schema.prisma`:
+```prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  plan          Plan      @default(FREE)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  evaluations   Evaluation[]
+  sessions      Session[]
+  
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  expires      DateTime
+  sessionToken String   @unique
+  accessToken  String?
+  refreshToken String?
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("sessions")
+}
+
+model Question {
+  id          String   @id @default(cuid())
+  title       String
+  content     String
+  subject     Subject
+  year        Int?
+  paper       String?
+  marks       Int?
+  timeLimit   Int?     // in minutes
+  keywords    String[] // Expected keywords for evaluation
+  sampleAnswer String?
+  createdAt   DateTime @default(now())
+  
+  evaluations Evaluation[]
+  
+  @@map("questions")
+}
+
+model Evaluation {
+  id              String   @id @default(cuid())
+  userId          String
+  questionId      String
+  
+  // Image processing
+  originalImageUrl String
+  processedImageUrl String?
+  imageMetadata   Json?    // Quality, dimensions, etc.
+  
+  // OCR Results
+  extractedText   String?
+  ocrProvider     String?  // google, aws, azure, tesseract
+  ocrConfidence   Float?
+  ocrMetadata     Json?
+  
+  // Evaluation Scores
+  contentScore    Float?   // 0-100
+  structureScore  Float?   // 0-100
+  handwritingScore Float?  // 0-100
+  overallScore    Float?   // 0-100
+  
+  // AI Feedback
+  strengths       String[]
+  improvements    String[]
+  suggestions     String[]
+  detailedFeedback String?
+  
+  // Processing Status
+  status          EvaluationStatus @default(PROCESSING)
+  processingTime  Int?             // in milliseconds
+  errorMessage    String?
+  
+  // Timestamps
+  createdAt       DateTime @default(now())
+  completedAt     DateTime?
+  
+  user     User     @relation(fields: [userId], references: [id])
+  question Question @relation(fields: [questionId], references: [id])
+  
+  @@map("evaluations")
+}
+
+model UsageStats {
+  id               String   @id @default(cuid())
+  userId           String
+  date             DateTime @default(now())
+  evaluationsCount Int      @default(0)
+  
+  @@unique([userId, date])
+  @@map("usage_stats")
+}
+
+enum Plan {
+  FREE
+  PREMIUM
+  ENTERPRISE
+}
+
+enum Subject {
+  GENERAL_STUDIES_1
+  GENERAL_STUDIES_2
+  GENERAL_STUDIES_3
+  GENERAL_STUDIES_4
+  ESSAY
+  OPTIONAL_SUBJECT
+}
+
+enum EvaluationStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+```
+
+### Step 1.4: Initialize Database
+
+```bash
+# Initialize Prisma
+npx prisma init
+
+# Generate Prisma client
+npx prisma generate
+
+# Run initial migration
+npx prisma db push
+
+# Seed database with sample questions
+npx prisma db seed
+```
+
+Create `prisma/seed.ts`:
+```typescript
+import { PrismaClient, Subject } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+async function main() {
+  // Create sample UPSC questions
+  const sampleQuestions = [
+    {
+      title: "Digital India Initiative",
+      content: "Critically analyze the Digital India initiative and its impact on governance and citizen services. Discuss the challenges and opportunities in its implementation. (250 words)",
+      subject: Subject.GENERAL_STUDIES_2,
+      year: 2023,
+      paper: "Mains",
+      marks: 15,
+      timeLimit: 20,
+      keywords: ["Digital India", "e-governance", "digital divide", "cyber security", "citizen services"],
+      sampleAnswer: "The Digital India initiative, launched in 2015, represents a transformative vision..."
+    },
+    {
+      title: "Climate Change and Agriculture",
+      content: "Examine the impact of climate change on Indian agriculture and suggest adaptive strategies for sustainable farming. (250 words)",
+      subject: Subject.GENERAL_STUDIES_3,
+      year: 2023,
+      paper: "Mains",
+      marks: 15,
+      timeLimit: 20,
+      keywords: ["climate change", "agriculture", "adaptation", "sustainable farming", "food security"],
+      sampleAnswer: "Climate change poses significant challenges to Indian agriculture..."
+    }
+  ];
+
+  for (const question of sampleQuestions) {
+    await prisma.question.upsert({
+      where: { title: question.title },
+      update: {},
+      create: question,
+    });
+  }
+
+  console.log('Database seeded successfully');
+}
+
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
+```
+
+### Step 1.5: Core Configuration Files
+
+Create `src/lib/config.ts`:
+```typescript
+export const config = {
+  // Database
+  database: {
+    url: process.env.DATABASE_URL!,
+  },
+  
+  // Redis
+  redis: {
+    url: process.env.REDIS_URL!,
+  },
+  
+  // OCR Providers
+  ocr: {
+    google: {
+      projectId: process.env.GOOGLE_CLOUD_PROJECT_ID!,
+      keyFilename: process.env.GOOGLE_APPLICATION_CREDENTIALS!,
+    },
+    aws: {
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID!,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!,
+      region: process.env.AWS_REGION!,
+    },
+    azure: {
+      subscriptionKey: process.env.AZURE_COMPUTER_VISION_SUBSCRIPTION_KEY!,
+      endpoint: process.env.AZURE_COMPUTER_VISION_ENDPOINT!,
+    },
+  },
+  
+  // AI Services
+  ai: {
+    openaiApiKey: process.env.OPENAI_API_KEY!,
+    googleAiApiKey: process.env.GOOGLE_AI_API_KEY!,
+  },
+  
+  // File Storage
+  storage: {
+    s3: {
+      bucket: process.env.AWS_S3_BUCKET!,
+      region: process.env.AWS_S3_REGION!,
+    },
+  },
+  
+  // Rate Limiting
+  rateLimit: {
+    maxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS || '1000'),
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS || '3600000'),
+  },
+  
+  // App Settings
+  app: {
+    maxFileSize: 10 * 1024 * 1024, // 10MB
+    supportedFormats: ['image/jpeg', 'image/png', 'application/pdf'],
+    ocrTimeout: 30000, // 30 seconds
+    evaluationTimeout: 60000, // 1 minute
+  },
+} as const;
+```
+
+---
+
+## 🔧 PHASE 2: OCR INTEGRATION & PROCESSING PIPELINE
+
+### Step 2.1: OCR Service Implementations
+
+Create `src/services/ocr/base.ts`:
+```typescript
+export interface OCRResult {
+  text: string;
+  confidence: number;
+  provider: string;
+  metadata: {
+    processingTime: number;
+    detectedLanguage?: string;
+    wordCount: number;
+    boundingBoxes?: Array<{
+      text: string;
+      confidence: number;
+      box: { x: number; y: number; width: number; height: number };
+    }>;
+  };
+}
+
+export interface OCRProvider {
+  name: string;
+  processImage(imageBuffer: Buffer, options?: OCROptions): Promise<OCRResult>;
+  getSupportedLanguages(): string[];
+  getMaxFileSize(): number;
+}
+
+export interface OCROptions {
+  language?: string;
+  detectOrientation?: boolean;
+  enhanceText?: boolean;
+}
+
+export class OCRError extends Error {
+  constructor(
+    message: string,
+    public provider: string,
+    public code?: string
+  ) {
+    super(message);
+    this.name = 'OCRError';
+  }
+}
+```
+
+Create `src/services/ocr/google-vision.ts`:
+```typescript
+import { ImageAnnotatorClient } from '@google-cloud/vision';
+import { OCRProvider, OCRResult, OCROptions, OCRError } from './base';
+import { config } from '@/lib/config';
+
+export class GoogleVisionOCR implements OCRProvider {
+  name = 'google-vision';
+  private client: ImageAnnotatorClient;
+
+  constructor() {
+    this.client = new ImageAnnotatorClient({
+      projectId: config.ocr.google.projectId,
+      keyFilename: config.ocr.google.keyFilename,
+    });
+  }
+
+  async processImage(imageBuffer: Buffer, options?: OCROptions): Promise<OCRResult> {
+    const startTime = Date.now();
+    
+    try {
+      const [result] = await this.client.documentTextDetection({
+        image: { content: imageBuffer },
+        imageContext: {
+          languageHints: options?.language ? [options.language] : ['en', 'hi'],
+        },
+      });
+
+      const annotations = result.textAnnotations || [];
+      const fullText = annotations[0]?.description || '';
+      
+      // Calculate average confidence
+      const avgConfidence = annotations.length > 1
+        ? annotations.slice(1).reduce((sum, ann) => sum + (ann.confidence || 0), 0) / (annotations.length - 1)
+        : 0;
+
+      // Extract word-level bounding boxes
+      const boundingBoxes = annotations.slice(1).map(ann => ({
+        text: ann.description || '',
+        confidence: ann.confidence || 0,
+        box: {
+          x: ann.boundingPoly?.vertices?.[0]?.x || 0,
+          y: ann.boundingPoly?.vertices?.[0]?.y || 0,
+          width: (ann.boundingPoly?.vertices?.[2]?.x || 0) - (ann.boundingPoly?.vertices?.[0]?.x || 0),
+          height: (ann.boundingPoly?.vertices?.[2]?.y || 0) - (ann.boundingPoly?.vertices?.[0]?.y || 0),
+        },
+      }));
+
+      return {
+        text: fullText,
+        confidence: avgConfidence,
+        provider: this.name,
+        metadata: {
+          processingTime: Date.now() - startTime,
+          detectedLanguage: result.textAnnotations?.[0]?.locale,
+          wordCount: fullText.split(/\s+/).length,
+          boundingBoxes,
+        },
+      };
+    } catch (error) {
+      throw new OCRError(
+        `Google Vision OCR failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        this.name,
+        'GOOGLE_VISION_ERROR'
+      );
+    }
+  }
+
+  getSupportedLanguages(): string[] {
+    return ['en', 'hi', 'ta', 'te', 'kn', 'ml', 'gu', 'bn', 'pa', 'or', 'as', 'mr'];
+  }
+
+  getMaxFileSize(): number {
+    return 20 * 1024 * 1024; // 20MB
+  }
+}
+```
+
+Create `src/services/ocr/aws-textract.ts`:
+```typescript
+import { TextractClient, AnalyzeDocumentCommand } from '@aws-sdk/client-textract';
+import { OCRProvider, OCRResult, OCROptions, OCRError } from './base';
+import { config } from '@/lib/config';
+
+export class AWSTextractOCR implements OCRProvider {
+  name = 'aws-textract';
+  private client: TextractClient;
+
+  constructor() {
+    this.client = new TextractClient({
+      region: config.ocr.aws.region,
+      credentials: {
+        accessKeyId: config.ocr.aws.accessKeyId,
+        secretAccessKey: config.ocr.aws.secretAccessKey,
+      },
+    });
+  }
+
+  async processImage(imageBuffer: Buffer, options?: OCROptions): Promise<OCRResult> {
+    const startTime = Date.now();
+    
+    try {
+      const command = new AnalyzeDocumentCommand({
+        Document: {
+          Bytes: imageBuffer,
+        },
+        FeatureTypes: ['TABLES', 'FORMS'],
+      });
+
+      const response = await this.client.send(command);
+      const blocks = response.Blocks || [];
+      
+      // Extract text from LINE blocks
+      const textLines = blocks
+        .filter(block => block.BlockType === 'LINE')
+        .map(block => block.Text || '')
+        .join('\n');
+
+      // Calculate average confidence
+      const avgConfidence = blocks
+        .filter(block => block.Confidence !== undefined)
+        .reduce((sum, block) => sum + (block.Confidence || 0), 0) / blocks.length || 0;
+
+      return {
+        text: textLines,
+        confidence: avgConfidence / 100, // Convert to 0-1 scale
+        provider: this.name,
+        metadata: {
+          processingTime: Date.now() - startTime,
+          wordCount: textLines.split(/\s+/).length,
+        },
+      };
+    } catch (error) {
+      throw new OCRError(
+        `AWS Textract OCR failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        this.name,
+        'AWS_TEXTRACT_ERROR'
+      );
+    }
+  }
+
+  getSupportedLanguages(): string[] {
+    return ['en']; // Textract primarily supports English
+  }
+
+  getMaxFileSize(): number {
+    return 10 * 1024 * 1024; // 10MB
+  }
+}
+```
+
+Create `src/services/ocr/azure-ocr.ts`:
+```typescript
+import { ComputerVisionClient } from '@azure/cognitiveservices-computervision';
+import { ApiKeyCredentials } from '@azure/ms-rest-js';
+import { OCRProvider, OCRResult, OCROptions, OCRError } from './base';
+import { config } from '@/lib/config';
+
+export class AzureOCR implements OCRProvider {
+  name = 'azure-ocr';
+  private client: ComputerVisionClient;
+
+  constructor() {
+    const credentials = new ApiKeyCredentials({
+      inHeader: { 'Ocp-Apim-Subscription-Key': config.ocr.azure.subscriptionKey }
+    });
+    this.client = new ComputerVisionClient(credentials, config.ocr.azure.endpoint);
+  }
+
+  async processImage(imageBuffer: Buffer, options?: OCROptions): Promise<OCRResult> {
+    const startTime = Date.now();
+    
+    try {
+      const result = await this.client.readInStream(imageBuffer);
+      const operationId = result.operationLocation?.split('/').pop();
+      
+      if (!operationId) {
+        throw new Error('Failed to get operation ID from Azure OCR');
+      }
+
+      // Poll for results
+      let readResult;
+      do {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        readResult = await this.client.getReadResult(operationId);
+      } while (readResult.status === 'running');
+
+      if (readResult.status !== 'succeeded') {
+        throw new Error(`Azure OCR failed with status: ${readResult.status}`);
+      }
+
+      // Extract text from results
+      const pages = readResult.analyzeResult?.readResults || [];
+      const allText = pages
+        .flatMap(page => page.lines || [])
+        .map(line => line.text)
+        .join('\n');
+
+      // Calculate average confidence
+      const allWords = pages.flatMap(page => 
+        page.lines?.flatMap(line => line.words || []) || []
+      );
+      const avgConfidence = allWords.length > 0
+        ? allWords.reduce((sum, word) => sum + (word.confidence || 0), 0) / allWords.length
+        : 0;
+
+      return {
+        text: allText,
+        confidence: avgConfidence,
+        provider: this.name,
+        metadata: {
+          processingTime: Date.now() - startTime,
+          wordCount: allText.split(/\s+/).length,
+        },
+      };
+    } catch (error) {
+      throw new OCRError(
+        `Azure OCR failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        this.name,
+        'AZURE_OCR_ERROR'
+      );
+    }
+  }
+
+  getSupportedLanguages(): string[] {
+    return ['en', 'hi', 'ar', 'zh-Hans', 'zh-Hant', 'cs', 'da', 'nl', 'fi', 'fr', 'de'];
+  }
+
+  getMaxFileSize(): number {
+    return 50 * 1024 * 1024; // 50MB
+  }
+}
+```
+
+Create `src/services/ocr/tesseract.ts`:
+```typescript
+import Tesseract from 'tesseract.js';
+import { OCRProvider, OCRResult, OCROptions, OCRError } from './base';
+
+export class TesseractOCR implements OCRProvider {
+  name = 'tesseract';
+
+  async processImage(imageBuffer: Buffer, options?: OCROptions): Promise<OCRResult> {
+    const startTime = Date.now();
+    
+    try {
+      const result = await Tesseract.recognize(
+        imageBuffer,
+        options?.language || 'eng+hin',
+        {
+          logger: () => {}, // Disable logging
+        }
+      );
+
+      return {
+        text: result.data.text,
+        confidence: result.data.confidence / 100, // Convert to 0-1 scale
+        provider: this.name,
+        metadata: {
+          processingTime: Date.now() - startTime,
+          wordCount: result.data.text.split(/\s+/).length,
+          boundingBoxes: result.data.words?.map(word => ({
+            text: word.text,
+            confidence: word.confidence / 100,
+            box: {
+              x: word.bbox.x0,
+              y: word.bbox.y0,
+              width: word.bbox.x1 - word.bbox.x0,
+              height: word.bbox.y1 - word.bbox.y0,
+            },
+          })),
+        },
+      };
+    } catch (error) {
+      throw new OCRError(
+        `Tesseract OCR failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        this.name,
+        'TESSERACT_ERROR'
+      );
+    }
+  }
+
+  getSupportedLanguages(): string[] {
+    return ['eng', 'hin', 'tam', 'tel', 'kan', 'mal', 'guj', 'ben', 'pan', 'ori', 'asm', 'mar'];
+  }
+
+  getMaxFileSize(): number {
+    return 10 * 1024 * 1024; // 10MB
+  }
+}
+```
+
+### Step 2.2: OCR Orchestrator Service
+
+Create `src/services/ocr/orchestrator.ts`:
+```typescript
+import { OCRProvider, OCRResult, OCROptions, OCRError } from './base';
+import { GoogleVisionOCR } from './google-vision';
+import { AWSTextractOCR } from './aws-textract';
+import { AzureOCR } from './azure-ocr';
+import { TesseractOCR } from './tesseract';
+
+export interface OCROrchestatorConfig {
+  providers: OCRProvider[];
+  fallbackStrategy: 'confidence' | 'speed' | 'cost';
+  minimumConfidence: number;
+  timeout: number;
+}
+
+export class OCROrchestrator {
+  private providers: Map<string, OCRProvider> = new Map();
+  private config: OCROrchestatorConfig;
+
+  constructor(config?: Partial<OCROrchestatorConfig>) {
+    this.config = {
+      providers: [],
+      fallbackStrategy: 'confidence',
+      minimumConfidence: 0.7,
+      timeout: 30000,
+      ...config,
+    };
+
+    // Initialize providers
+    this.providers.set('google-vision', new GoogleVisionOCR());
+    this.providers.set('aws-textract', new AWSTextractOCR());
+    this.providers.set('azure-ocr', new AzureOCR());
+    this.providers.set('tesseract', new TesseractOCR());
+  }
+
+  async processImage(
+    imageBuffer: Buffer,
+    options?: OCROptions & { preferredProvider?: string }
+  ): Promise<OCRResult> {
+    const startTime = Date.now();
+    const providers = this.getProviderOrder(options?.preferredProvider);
+    const results: OCRResult[] = [];
+    const errors: OCRError[] = [];
+
+    for (const providerName of providers) {
+      const provider = this.providers.get(providerName);
+      if (!provider) continue;
+
+      try {
+        console.log(`Attempting OCR with ${providerName}...`);
+        
+        const result = await Promise.race([
+          provider.processImage(imageBuffer, options),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Timeout')), this.config.timeout)
+          ),
+        ]);
+
+        results.push(result);
+
+        // If confidence is above threshold, return immediately
+        if (result.confidence >= this.config.minimumConfidence) {
+          console.log(`OCR successful with ${providerName} (confidence: ${result.confidence})`);
+          return result;
+        }
+
+        console.log(`OCR completed with ${providerName} but low confidence: ${result.confidence}`);
+      } catch (error) {
+        const ocrError = error instanceof OCRError 
+          ? error 
+          : new OCRError(
+              `${providerName} failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+              providerName
+            );
+        errors.push(ocrError);
+        console.warn(`OCR failed with ${providerName}:`, ocrError.message);
+      }
+    }
+
+    // If we have results but none meet confidence threshold, return the best one
+    if (results.length > 0) {
+      const bestResult = results.reduce((best, current) =>
+        current.confidence > best.confidence ? current : best
+      );
+      
+      console.log(`Returning best result from ${bestResult.provider} with confidence: ${bestResult.confidence}`);
+      return bestResult;
+    }
+
+    // If all providers failed, throw the first error
+    throw new OCRError(
+      `All OCR providers failed. Errors: ${errors.map(e => e.message).join(', ')}`,
+      'orchestrator',
+      'ALL_PROVIDERS_FAILED'
+    );
+  }
+
+  private getProviderOrder(preferredProvider?: string): string[] {
+    const allProviders = Array.from(this.providers.keys());
+    
+    if (preferredProvider && this.providers.has(preferredProvider)) {
+      return [preferredProvider, ...allProviders.filter(p => p !== preferredProvider)];
+    }
+
+    // Default order based on accuracy and features
+    return ['google-vision', 'azure-ocr', 'aws-textract', 'tesseract'];
+  }
+
+  async getBestProviderForLanguage(language: string): Promise<string> {
+    const languageSupport: Record<string, string[]> = {
+      'en': ['google-vision', 'azure-ocr', 'aws-textract', 'tesseract'],
+      'hi': ['google-vision', 'azure-ocr', 'tesseract'],
+      'ta': ['google-vision', 'tesseract'],
+      'te': ['google-vision', 'tesseract'],
+      'kn': ['google-vision', 'tesseract'],
+      'ml': ['google-vision', 'tesseract'],
+    };
+
+    const supportedProviders = languageSupport[language] || languageSupport['en'];
+    return supportedProviders[0];
+  }
+
+  getProviderStats(): Array<{ name: string; isAvailable: boolean; supportedLanguages: string[] }> {
+    return Array.from(this.providers.entries()).map(([name, provider]) => ({
+      name,
+      isAvailable: true, // Could add health checks here
+      supportedLanguages: provider.getSupportedLanguages(),
+    }));
+  }
+}
+```
+
+### Step 2.3: Image Processing Service
+
+Create `src/services/image-processing.ts`:
+```typescript
+import sharp from 'sharp';
+
+export interface ImageQualityMetrics {
+  resolution: { width: number; height: number };
+  fileSize: number;
+  format: string;
+  hasColor: boolean;
+  brightness: number;
+  contrast: number;
+  sharpness: number;
+  qualityScore: number; // 0-100
+  recommendations: string[];
+}
+
+export interface ImageEnhancementOptions {
+  enhanceContrast?: boolean;
+  removeNoise?: boolean;
+  sharpenText?: boolean;
+  deskew?: boolean;
+  cropWhitespace?: boolean;
+}
+
+export class ImageProcessingService {
+  async assessImageQuality(imageBuffer: Buffer): Promise<ImageQualityMetrics> {
+    const image = sharp(imageBuffer);
+    const metadata = await image.metadata();
+    const stats = await image.stats();
+    
+    const width = metadata.width || 0;
+    const height = metadata.height || 0;
+    const fileSize = imageBuffer.length;
+    
+    // Calculate quality metrics
+    const resolution = width * height;
+    const brightness = this.calculateBrightness(stats);
+    const contrast = this.calculateContrast(stats);
+    const sharpness = await this.calculateSharpness(image);
+    
+    // Generate quality score
+    const qualityScore = this.calculateQualityScore({
+      resolution,
+      brightness,
+      contrast,
+      sharpness,
+      fileSize,
+    });
+    
+    // Generate recommendations
+    const recommendations = this.generateRecommendations({
+      width,
+      height,
+      brightness,
+      contrast,
+      sharpness,
+      qualityScore,
+    });
+
+    return {
+      resolution: { width, height },
+      fileSize,
+      format: metadata.format || 'unknown',
+      hasColor: metadata.channels ? metadata.channels > 1 : false,
+      brightness,
+      contrast,
+      sharpness,
+      qualityScore,
+      recommendations,
+    };
+  }
+
+  async enhanceImage(
+    imageBuffer: Buffer,
+    options: ImageEnhancementOptions = {}
+  ): Promise<Buffer> {
+    let image = sharp(imageBuffer);
+
+    // Convert to grayscale for better OCR performance
+    image = image.grayscale();
+
+    // Enhance contrast if requested
+    if (options.enhanceContrast) {
+      image = image.linear(1.2, -(128 * 1.2) + 128); // Increase contrast
+    }
+
+    // Remove noise if requested
+    if (options.removeNoise) {
+      image = image.blur(0.3); // Light blur to reduce noise
+    }
+
+    // Sharpen text if requested
+    if (options.sharpenText) {
+      image = image.sharpen({ sigma: 1, flat: 1, jagged: 2 });
+    }
+
+    // Crop whitespace if requested
+    if (options.cropWhitespace) {
+      image = image.trim({ threshold: 10 });
+    }
+
+    // Normalize the image
+    image = image.normalize();
+
+    return await image.jpeg({ quality: 95 }).toBuffer();
+  }
+
+  async compressImage(imageBuffer: Buffer, maxSizeKB: number = 1024): Promise<Buffer> {
+    const image = sharp(imageBuffer);
+    const metadata = await image.metadata();
+    
+    if (!metadata.width || !metadata.height) {
+      throw new Error('Invalid image metadata');
+    }
+
+    let quality = 95;
+    let width = metadata.width;
+    let height = metadata.height;
+    
+    // Calculate compression needed
+    const currentSizeKB = imageBuffer.length / 1024;
+    
+    if (currentSizeKB <= maxSizeKB) {
+      return imageBuffer; // No compression needed
+    }
+
+    // Reduce dimensions if needed
+    const compressionRatio = maxSizeKB / currentSizeKB;
+    if (compressionRatio < 0.5) {
+      const scaleFactor = Math.sqrt(compressionRatio);
+      width = Math.floor(width * scaleFactor);
+      height = Math.floor(height * scaleFactor);
+    }
+
+    // Adjust quality
+    quality = Math.max(70, Math.floor(95 * compressionRatio));
+
+    return await image
+      .resize(width, height, { kernel: sharp.kernel.lanczos3 })
+      .jpeg({ quality })
+      .toBuffer();
+  }
+
+  private calculateBrightness(stats: sharp.Stats): number {
+    const avgBrightness = stats.channels.reduce((sum, channel) => 
+      sum + channel.mean, 0) / stats.channels.length;
+    return avgBrightness / 255 * 100; // Convert to percentage
+  }
+
+  private calculateContrast(stats: sharp.Stats): number {
+    const avgStdDev = stats.channels.reduce((sum, channel) => 
+      sum + channel.stdev, 0) / stats.channels.length;
+    return Math.min(100, avgStdDev / 64 * 100); // Normalize to percentage
+  }
+
+  private async calculateSharpness(image: sharp.Sharp): Promise<number> {
+    try {
+      // Apply Laplacian filter to detect edges (sharpness indicator)
+      const edgeBuffer = await image
+        .clone()
+        .grayscale()
+        .convolve({
+          width: 3,
+          height: 3,
+          kernel: [-1, -1, -1, -1, 8, -1, -1, -1, -1]
+        })
+        .raw()
+        .toBuffer();
+
+      // Calculate variance of edge detection result
+      const pixels = new Uint8Array(edgeBuffer);
+      const mean = pixels.reduce((sum, pixel) => sum + pixel, 0) / pixels.length;
+      const variance = pixels.reduce((sum, pixel) => sum + Math.pow(pixel - mean, 2), 0) / pixels.length;
+      
+      return Math.min(100, variance / 1000); // Normalize to percentage
+    } catch (error) {
+      console.warn('Sharpness calculation failed:', error);
+      return 50; // Default moderate sharpness
+    }
+  }
+
+  private calculateQualityScore(metrics: {
+    resolution: number;
+    brightness: number;
+    contrast: number;
+    sharpness: number;
+    fileSize: number;
+  }): number {
+    const { resolution, brightness, contrast, sharpness } = metrics;
+    
+    // Resolution score (prefer images > 1MP)
+    const resolutionScore = Math.min(100, Math.sqrt(resolution / 1000000) * 100);
+    
+    // Brightness score (prefer 20-80% brightness)
+    const brightnessScore = brightness >= 20 && brightness <= 80 ? 100 : 
+      Math.max(0, 100 - Math.abs(brightness - 50) * 2);
+    
+    // Contrast score (prefer higher contrast)
+    const contrastScore = Math.min(100, contrast * 2);
+    
+    // Sharpness score
+    const sharpnessScore = Math.min(100, sharpness * 2);
+    
+    // Weighted average
+    return Math.round(
+      resolutionScore * 0.3 +
+      brightnessScore * 0.25 +
+      contrastScore * 0.25 +
+      sharpnessScore * 0.2
+    );
+  }
+
+  private generateRecommendations(metrics: {
+    width: number;
+    height: number;
+    brightness: number;
+    contrast: number;
+    sharpness: number;
+    qualityScore: number;
+  }): string[] {
+    const recommendations: string[] = [];
+    
+    if (metrics.width < 1200 || metrics.height < 800) {
+      recommendations.push('Capture image at higher resolution for better text recognition');
+    }
+    
+    if (metrics.brightness < 20) {
+      recommendations.push('Increase lighting - image appears too dark');
+    } else if (metrics.brightness > 80) {
+      recommendations.push('Reduce lighting or exposure - image appears overexposed');
+    }
+    
+    if (metrics.contrast < 30) {
+      recommendations.push('Improve contrast between text and background');
+    }
+    
+    if (metrics.sharpness < 30) {
+      recommendations.push('Ensure image is in focus and avoid camera shake');
+    }
+    
+    if (metrics.qualityScore < 60) {
+      recommendations.push('Consider retaking the photo with better lighting and focus');
+    }
+    
+    return recommendations;
+  }
+}
+```
+
+---
+
+## 🤖 PHASE 3: AI EVALUATION ENGINE
+
+### Step 3.1: Content Analysis Service
+
+Create `src/services/ai/content-analyzer.ts`:
+```typescript
+import { encode } from 'gpt-3-encoder';
+import OpenAI from 'openai';
+import { config } from '@/lib/config';
+
+export interface ContentAnalysisResult {
+  relevanceScore: number; // 0-100
+  depthScore: number; // 0-100
+  accuracyScore: number; // 0-100
+  keywordCoverage: number; // 0-100
+  
+  coveredKeywords: string[];
+  missedKeywords: string[];
+  additionalConcepts: string[];
+  
+  strengthsIdentified: string[];
+  improvementAreas: string[];
+  factualErrors: string[];
+  
+  overallContentScore: number; // 0-100
+}
+
+export interface StructureAnalysisResult {
+  introductionScore: number; // 0-100
+  bodyScore: number; // 0-100
+  conclusionScore: number; // 0-100
+  logicalFlowScore: number; // 0-100
+  coherenceScore: number; // 0-100
+  
+  paragraphCount: number;
+  averageParagraphLength: number;
+  transitionQuality: number; // 0-100
+  
+  structuralStrengths: string[];
+  structuralWeaknesses: string[];
+  
+  overallStructureScore: number; // 0-100
+}
+
+export class ContentAnalyzer {
+  private openai: OpenAI;
+
+  constructor() {
+    this.openai = new OpenAI({
+      apiKey: config.ai.openaiApiKey,
+    });
+  }
+
+  async analyzeContent(
+    extractedText: string,
+    questionData: {
+      content: string;
+      keywords: string[];
+      subject: string;
+      marks: number;
+    }
+  ): Promise<ContentAnalysisResult> {
+    const prompt = this.buildContentAnalysisPrompt(extractedText, questionData);
+    
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert UPSC examiner with 15+ years of experience evaluating Mains answers. Provide detailed, constructive analysis.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 2000,
+        response_format: { type: 'json_object' },
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error('No response from OpenAI');
+      }
+
+      return JSON.parse(content) as ContentAnalysisResult;
+    } catch (error) {
+      console.error('Content analysis failed:', error);
+      // Return default analysis
+      return this.getDefaultContentAnalysis(extractedText, questionData.keywords);
+    }
+  }
+
+  async analyzeStructure(extractedText: string): Promise<StructureAnalysisResult> {
+    const prompt = this.buildStructureAnalysisPrompt(extractedText);
+    
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are an expert in academic writing structure and UPSC answer evaluation. Analyze the structural quality of the given answer.',
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        temperature: 0.1,
+        max_tokens: 1500,
+        response_format: { type: 'json_object' },
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error('No response from OpenAI');
+      }
+
+      return JSON.parse(content) as StructureAnalysisResult;
+    } catch (error) {
+      console.error('Structure analysis failed:', error);
+      return this.getDefaultStructureAnalysis(extractedText);
+    }
+  }
+
+  private buildContentAnalysisPrompt(
+    text: string,
+    questionData: {
+      content: string;
+      keywords: string[];
+      subject: string;
+      marks: number;
+    }
+  ): string {
+    return `
+Analyze this UPSC Mains answer and provide detailed evaluation in JSON format.
+
+**Question:** ${questionData.content}
+**Subject:** ${questionData.subject}
+**Marks:** ${questionData.marks}
+**Expected Keywords:** ${questionData.keywords.join(', ')}
+
+**Student Answer:**
+${text}
+
+Provide analysis in this exact JSON format:
+{
+  "relevanceScore": number (0-100, how well answer addresses the question),
+  "depthScore": number (0-100, depth of analysis and understanding),
+  "accuracyScore": number (0-100, factual accuracy),
+  "keywordCoverage": number (0-100, percentage of expected keywords covered),
+  
+  "coveredKeywords": ["keyword1", "keyword2"],
+  "missedKeywords": ["keyword3", "keyword4"],
+  "additionalConcepts": ["concept1", "concept2"],
+  
+  "strengthsIdentified": ["strength1", "strength2"],
+  "improvementAreas": ["improvement1", "improvement2"],
+  "factualErrors": ["error1", "error2"],
+  
+  "overallContentScore": number (0-100, weighted average of above scores)
+}
+
+Focus on UPSC-specific evaluation criteria: multi-dimensional analysis, use of examples, critical thinking, and balanced arguments.
+    `;
+  }
+
+  private buildStructureAnalysisPrompt(text: string): string {
+    return `
+Analyze the structure and organization of this UPSC Mains answer. Provide detailed evaluation in JSON format.
+
+**Answer Text:**
+${text}
+
+Evaluate based on UPSC standards and provide analysis in this exact JSON format:
+{
+  "introductionScore": number (0-100, hook, context, thesis clarity),
+  "bodyScore": number (0-100, logical development, paragraph organization),
+  "conclusionScore": number (0-100, synthesis, forward-looking statements),
+  "logicalFlowScore": number (0-100, smooth transitions between ideas),
+  "coherenceScore": number (0-100, overall coherence and unity),
+  
+  "paragraphCount": number,
+  "averageParagraphLength": number (words per paragraph),
+  "transitionQuality": number (0-100, quality of transitions between paragraphs),
+  
+  "structuralStrengths": ["strength1", "strength2"],
+  "structuralWeaknesses": ["weakness1", "weakness2"],
+  
+  "overallStructureScore": number (0-100, weighted average considering UPSC expectations)
+}
+
+Consider UPSC-specific structural requirements: clear introduction with context, well-developed body with multiple dimensions, and conclusive ending with way forward.
+    `;
+  }
+
+  private getDefaultContentAnalysis(
+    text: string,
+    keywords: string[]
+  ): ContentAnalysisResult {
+    // Basic keyword matching fallback
+    const textLower = text.toLowerCase();
+    const coveredKeywords = keywords.filter(keyword =>
+      textLower.includes(keyword.toLowerCase())
+    );
+    const keywordCoverage = (coveredKeywords.length / keywords.length) * 100;
+    
+    return {
+      relevanceScore: Math.min(80, Math.max(40, keywordCoverage)),
+      depthScore: Math.min(70, text.length / 50), // Rough depth based on length
+      accuracyScore: 75, // Default moderate score
+      keywordCoverage,
+      
+      coveredKeywords,
+      missedKeywords: keywords.filter(k => !coveredKeywords.includes(k)),
+      additionalConcepts: [],
+      
+      strengthsIdentified: ['Attempts to address the question'],
+      improvementAreas: ['Could provide more detailed analysis'],
+      factualErrors: [],
+      
+      overallContentScore: Math.round((keywordCoverage + 75 + 70) / 3),
+    };
+  }
+
+  private getDefaultStructureAnalysis(text: string): StructureAnalysisResult {
+    const paragraphs = text.split('\n\n').filter(p => p.trim().length > 0);
+    const wordCount = text.split(/\s+/).length;
+    
+    return {
+      introductionScore: paragraphs.length > 0 ? 70 : 40,
+      bodyScore: paragraphs.length > 2 ? 75 : 50,
+      conclusionScore: paragraphs.length > 1 ? 70 : 40,
+      logicalFlowScore: 65,
+      coherenceScore: 70,
+      
+      paragraphCount: paragraphs.length,
+      averageParagraphLength: Math.round(wordCount / Math.max(1, paragraphs.length)),
+      transitionQuality: 60,
+      
+      structuralStrengths: ['Organized in paragraphs'],
+      structuralWeaknesses: paragraphs.length < 3 ? ['Could benefit from better paragraph organization'] : [],
+      
+      overallStructureScore: 68,
+    };
+  }
+
+  // Helper method to calculate token count for cost estimation
+  getTokenCount(text: string): number {
+    return encode(text).length;
+  }
+}
+```
+
+### Step 3.2: Feedback Generation Service
+
+Create `src/services/ai/feedback-generator.ts`:
+```typescript
+import OpenAI from 'openai';
+import { ContentAnalysisResult, StructureAnalysisResult } from './content-analyzer';
+import { config } from '@/lib/config';
+
+export interface GeneratedFeedback {
+  overallScore: number; // 0-100
+  grade: string; // A+, A, B+, B, C+, C, D
+  
+  strengths: string[];
+  improvements: string[];
+  suggestions: string[];
+  
+  detailedFeedback: string;
+  personalizedMessage: string;
+  
+  scoreBreakdown: {
+    content: number;
+    structure: number;
+    handwriting: number;
+    overall: number;
+  };
+  
+  nextSteps: string[];
+  resourceRecommendations: string[];
+}
+
+export interface HandwritingAnalysis {
+  legibilityScore: number; // 0-100
+  consistencyScore: number; // 0-100
+  neatnessScore: number; // 0-100
+  speedEstimate: 'slow' | 'moderate' | 'fast';
+  
+  handwritingStrengths: string[];
+  handwritingIssues: string[];
+  improvementTips: string[];
+  
+  overallHandwritingScore: number; // 0-100
+}
+
+export class FeedbackGenerator {
+  private openai: OpenAI;
+
+  constructor() {
+    this.openai = new OpenAI({
+      apiKey: config.ai.openaiApiKey,
+    });
+  }
+
+  async generateComprehensiveFeedback(
+    contentAnalysis: ContentAnalysisResult,
+    structureAnalysis: StructureAnalysisResult,
+    handwritingAnalysis: HandwritingAnalysis,
+    questionData: {
+      content: string;
+      subject: string;
+      marks: number;
+    },
+    userProfile?: {
+      name?: string;
+      previousScores?: number[];
+      weakAreas?: string[];
+    }
+  ): Promise<GeneratedFeedback> {
+    const prompt = this.buildFeedbackPrompt(
+      contentAnalysis,
+      structureAnalysis,
+      handwritingAnalysis,
+      questionData,
+      userProfile
+    );
+
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a senior UPSC examiner and mentor with 20+ years of experience. You provide constructive, encouraging, and actionable feedback that helps students improve. Your feedback is specific, balanced, and motivational.`,
+          },
+          {
+            role: 'user',
+            content: prompt,
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 2500,
+        response_format: { type: 'json_object' },
+      });
+
+      const content = response.choices[0]?.message?.content;
+      if (!content) {
+        throw new Error('No response from OpenAI');
+      }
+
+      return JSON.parse(content) as GeneratedFeedback;
+    } catch (error) {
+      console.error('Feedback generation failed:', error);
+      return this.getDefaultFeedback(contentAnalysis, structureAnalysis, handwritingAnalysis);
+    }
+  }
+
+  analyzeHandwriting(
+    ocrResult: {
+      confidence: number;
+      metadata: {
+        boundingBoxes?: Array<{
+          text: string;
+          confidence: number;
+          box: { x: number; y: number; width: number; height: number };
+        }>;
+      };
+    },
+    imageQuality: {
+      qualityScore: number;
+      sharpness: number;
+      contrast: number;
+    }
+  ): HandwritingAnalysis {
+    const { confidence, metadata } = ocrResult;
+    const { qualityScore, sharpness, contrast } = imageQuality;
+    
+    // Calculate legibility based on OCR confidence
+    const legibilityScore = Math.round(confidence * 100);
+    
+    // Calculate consistency based on confidence variance
+    let consistencyScore = 75; // Default
+    if (metadata.boundingBoxes && metadata.boundingBoxes.length > 5) {
+      const confidences = metadata.boundingBoxes.map(box => box.confidence);
+      const mean = confidences.reduce((sum, c) => sum + c, 0) / confidences.length;
+      const variance = confidences.reduce((sum, c) => sum + Math.pow(c - mean, 2), 0) / confidences.length;
+      const stdDev = Math.sqrt(variance);
+      consistencyScore = Math.max(0, Math.round((1 - stdDev) * 100));
+    }
+    
+    // Calculate neatness based on image quality
+    const neatnessScore = Math.round((qualityScore + sharpness + contrast) / 3);
+    
+    // Estimate writing speed based on character density
+    let speedEstimate: 'slow' | 'moderate' | 'fast' = 'moderate';
+    if (metadata.boundingBoxes && metadata.boundingBoxes.length > 0) {
+      const totalArea = metadata.boundingBoxes.reduce((sum, box) => 
+        sum + (box.box.width * box.box.height), 0);
+      const averageCharSize = totalArea / metadata.boundingBoxes.length;
+      
+      if (averageCharSize > 1000) speedEstimate = 'slow';
+      else if (averageCharSize < 300) speedEstimate = 'fast';
+    }
+    
+    // Generate feedback
+    const handwritingStrengths: string[] = [];
+    const handwritingIssues: string[] = [];
+    const improvementTips: string[] = [];
+    
+    if (legibilityScore >= 80) {
+      handwritingStrengths.push('Excellent legibility - text is very clear to read');
+    } else if (legibilityScore >= 60) {
+      handwritingStrengths.push('Good legibility - most text is readable');
+    } else {
+      handwritingIssues.push('Legibility needs improvement - some text is difficult to read');
+      improvementTips.push('Practice writing slowly and focus on letter formation');
+    }
+    
+    if (consistencyScore >= 80) {
+      handwritingStrengths.push('Consistent handwriting style throughout');
+    } else if (consistencyScore < 60) {
+      handwritingIssues.push('Handwriting consistency varies across the answer');
+      improvementTips.push('Practice maintaining consistent letter size and spacing');
+    }
+    
+    if (neatnessScore >= 75) {
+      handwritingStrengths.push('Neat and well-organized presentation');
+    } else if (neatnessScore < 50) {
+      handwritingIssues.push('Presentation could be neater');
+      improvementTips.push('Use proper margins and maintain line spacing');
+    }
+    
+    if (speedEstimate === 'slow') {
+      improvementTips.push('Practice writing faster while maintaining legibility');
+    } else if (speedEstimate === 'fast') {
+      improvementTips.push('Slow down slightly to improve clarity');
+    }
+    
+    const overallHandwritingScore = Math.round(
+      (legibilityScore * 0.5) + (consistencyScore * 0.3) + (neatnessScore * 0.2)
+    );
+    
+    return {
+      legibilityScore,
+      consistencyScore,
+      neatnessScore,
+      speedEstimate,
+      handwritingStrengths,
+      handwritingIssues,
+      improvementTips,
+      overallHandwritingScore,
+    };
+  }
+
+  private buildFeedbackPrompt(
+    contentAnalysis: ContentAnalysisResult,
+    structureAnalysis: StructureAnalysisResult,
+    handwritingAnalysis: HandwritingAnalysis,
+    questionData: {
+      content: string;
+      subject: string;
+      marks: number;
+    },
+    userProfile?: {
+      name?: string;
+      previousScores?: number[];
+      weakAreas?: string[];
+    }
+  ): string {
+    const userName = userProfile?.name || 'Student';
+    const improvementContext = userProfile?.weakAreas?.length 
+      ? `Previous weak areas: ${userProfile.weakAreas.join(', ')}` 
+      : '';
+
+    return `
+Generate comprehensive, encouraging feedback for this UPSC Mains answer evaluation.
+
+**Question Details:**
+- Question: ${questionData.content}
+- Subject: ${questionData.subject}
+- Marks: ${questionData.marks}
+
+**Student Profile:**
+- Name: ${userName}
+${improvementContext}
+
+**Analysis Results:**
+- Content Score: ${contentAnalysis.overallContentScore}/100
+- Structure Score: ${structureAnalysis.overallStructureScore}/100
+- Handwriting Score: ${handwritingAnalysis.overallHandwritingScore}/100
+
+**Detailed Metrics:**
+Content: Relevance(${contentAnalysis.relevanceScore}), Depth(${contentAnalysis.depthScore}), Accuracy(${contentAnalysis.accuracyScore})
+Structure: Intro(${structureAnalysis.introductionScore}), Body(${structureAnalysis.bodyScore}), Conclusion(${structureAnalysis.conclusionScore})
+Handwriting: Legibility(${handwritingAnalysis.legibilityScore}), Consistency(${handwritingAnalysis.consistencyScore})
+
+**Identified Strengths:** ${[...contentAnalysis.strengthsIdentified, ...structureAnalysis.structuralStrengths, ...handwritingAnalysis.handwritingStrengths].join(', ')}
+
+**Areas for Improvement:** ${[...contentAnalysis.improvementAreas, ...structureAnalysis.structuralWeaknesses, ...handwritingAnalysis.handwritingIssues].join(', ')}
+
+Provide response in this exact JSON format:
+{
+  "overallScore": number (0-100, weighted: content 50%, structure 30%, handwriting 20%),
+  "grade": string ("A+", "A", "B+", "B", "C+", "C", "D"),
+  
+  "strengths": [3-5 specific strengths from the analysis],
+  "improvements": [3-5 specific areas to improve],
+  "suggestions": [3-5 actionable suggestions for improvement],
+  
+  "detailedFeedback": "2-3 paragraph comprehensive feedback that's encouraging yet constructive",
+  "personalizedMessage": "1-2 sentences personalized to the student",
+  
+  "scoreBreakdown": {
+    "content": ${contentAnalysis.overallContentScore},
+    "structure": ${structureAnalysis.overallStructureScore},
+    "handwriting": ${handwritingAnalysis.overallHandwritingScore},
+    "overall": calculated_overall_score
+  },
+  
+  "nextSteps": [3-4 immediate action items for improvement],
+  "resourceRecommendations": [2-3 study resources or practice methods]
+}
+
+Make the feedback encouraging, specific, and actionable. Focus on growth mindset and concrete steps for improvement.
+    `;
+  }
+
+  private getDefaultFeedback(
+    contentAnalysis: ContentAnalysisResult,
+    structureAnalysis: StructureAnalysisResult,
+    handwritingAnalysis: HandwritingAnalysis
+  ): GeneratedFeedback {
+    const overallScore = Math.round(
+      (contentAnalysis.overallContentScore * 0.5) +
+      (structureAnalysis.overallStructureScore * 0.3) +
+      (handwritingAnalysis.overallHandwritingScore * 0.2)
+    );
+
+    const grade = this.calculateGrade(overallScore);
+
+    return {
+      overallScore,
+      grade,
+      
+      strengths: [
+        'Shows understanding of the topic',
+        'Attempts to address the question',
+        'Organized presentation',
+      ],
+      
+      improvements: [
+        'Could provide more detailed analysis',
+        'Add more relevant examples',
+        'Improve conclusion strength',
+      ],
+      
+      suggestions: [
+        'Practice writing more comprehensive answers',
+        'Include current examples and case studies',
+        'Work on time management for detailed responses',
+      ],
+      
+      detailedFeedback: `Your answer demonstrates a basic understanding of the topic and shows effort in addressing the question. While you've covered some key points, there's room for improvement in depth of analysis and use of relevant examples. Focus on developing your arguments more comprehensively and ensure your conclusion ties together your main points effectively.`,
+      
+      personalizedMessage: 'Keep practicing! Your consistent effort will lead to significant improvement.',
+      
+      scoreBreakdown: {
+        content: contentAnalysis.overallContentScore,
+        structure: structureAnalysis.overallStructureScore,
+        handwriting: handwritingAnalysis.overallHandwritingScore,
+        overall: overallScore,
+      },
+      
+      nextSteps: [
+        'Practice answer writing daily',
+        'Read model answers for reference',
+        'Focus on time-bound practice',
+        'Improve handwriting consistency',
+      ],
+      
+      resourceRecommendations: [
+        'Study current affairs from reliable sources',
+        'Practice previous year questions',
+        'Join peer discussion groups',
+      ],
+    };
+  }
+
+  private calculateGrade(score: number): string {
+    if (score >= 90) return 'A+';
+    if (score >= 80) return 'A';
+    if (score >= 70) return 'B+';
+    if (score >= 60) return 'B';
+    if (score >= 50) return 'C+';
+    if (score >= 40) return 'C';
+    return 'D';
+  }
+}
+```
+
+### Step 3.3: Main Evaluation Service
+
+Create `src/services/evaluation-service.ts`:
+```typescript
+import { OCROrchestrator } from './ocr/orchestrator';
+import { ImageProcessingService } from './image-processing';
+import { ContentAnalyzer } from './ai/content-analyzer';
+import { FeedbackGenerator } from './ai/feedback-generator';
+import { PrismaClient } from '@prisma/client';
+import { uploadToS3, deleteFromS3 } from './storage-service';
+
+const prisma = new PrismaClient();
+
+export interface EvaluationRequest {
+  userId: string;
+  questionId: string;
+  imageBuffer: Buffer;
+  fileName: string;
+  options?: {
+    preferredOCRProvider?: string;
+    enhanceImage?: boolean;
+    priority?: 'speed' | 'accuracy';
+  };
+}
+
+export interface EvaluationProgress {
+  stage: 'uploading' | 'processing_image' | 'ocr' | 'ai_analysis' | 'generating_feedback' | 'completed' | 'failed';
+  progress: number; // 0-100
+  message: string;
+  estimatedTimeRemaining?: number; // seconds
+}
+
+export class EvaluationService {
+  private ocrOrchestrator: OCROrchestrator;
+  private imageProcessor: ImageProcessingService;
+  private contentAnalyzer: ContentAnalyzer;
+  private feedbackGenerator: FeedbackGenerator;
+
+  constructor() {
+    this.ocrOrchestrator = new OCROrchestrator();
+    this.imageProcessor = new ImageProcessingService();
+    this.contentAnalyzer = new ContentAnalyzer();
+    this.feedbackGenerator = new FeedbackGenerator();
+  }
+
+  async startEvaluation(
+    request: EvaluationRequest,
+    progressCallback?: (progress: EvaluationProgress) => void
+  ): Promise<string> {
+    const startTime = Date.now();
+    
+    // Create evaluation record
+    const evaluation = await prisma.evaluation.create({
+      data: {
+        userId: request.userId,
+        questionId: request.questionId,
+        originalImageUrl: '', // Will be updated after upload
+        status: 'PROCESSING',
+      },
+    });
+
+    // Start async processing
+    this.processEvaluationAsync(evaluation.id, request, progressCallback)
+      .catch((error) => {
+        console.error(`Evaluation ${evaluation.id} failed:`, error);
+        this.handleEvaluationError(evaluation.id, error);
+      });
+
+    return evaluation.id;
+  }
+
+  private async processEvaluationAsync(
+    evaluationId: string,
+    request: EvaluationRequest,
+    progressCallback?: (progress: EvaluationProgress) => void
+  ): Promise<void> {
+    const updateProgress = (stage: EvaluationProgress['stage'], progress: number, message: string) => {
+      progressCallback?.({ stage, progress, message });
+    };
+
+    const startTime = Date.now();
+
+    try {
+      // Stage 1: Upload and process image (0-20%)
+      updateProgress('uploading', 5, 'Uploading image...');
+      
+      const originalImageUrl = await uploadToS3(
+        request.imageBuffer,
+        `evaluations/${evaluationId}/original-${request.fileName}`
+      );
+
+      await prisma.evaluation.update({
+        where: { id: evaluationId },
+        data: { originalImageUrl },
+      });
+
+      updateProgress('processing_image', 10, 'Analyzing image quality...');
+      
+      const imageQuality = await this.imageProcessor.assessImageQuality(request.imageBuffer);
+      
+      // Enhance image if needed or requested
+      let processedImageBuffer = request.imageBuffer;
+      if (request.options?.enhanceImage || imageQuality.qualityScore < 70) {
+        updateProgress('processing_image', 15, 'Enhancing image...');
+        processedImageBuffer = await this.imageProcessor.enhanceImage(request.imageBuffer, {
+          enhanceContrast: true,
+          removeNoise: true,
+          sharpenText: true,
+          cropWhitespace: true,
+        });
+
+        const processedImageUrl = await uploadToS3(
+          processedImageBuffer,
+          `evaluations/${evaluationId}/processed-${request.fileName}`
+        );
+
+        await prisma.evaluation.update({
+          where: { id: evaluationId },
+          data: { 
+            processedImageUrl,
+            imageMetadata: imageQuality,
+          },
+        });
+      }
+
+      // Stage 2: OCR Processing (20-50%)
+      updateProgress('ocr', 25, 'Extracting text from image...');
+      
+      const ocrResult = await this.ocrOrchestrator.processImage(
+        processedImageBuffer,
+        {
+          preferredProvider: request.options?.preferredOCRProvider,
+          language: 'en', // Could be detected automatically
+        }
+      );
+
+      await prisma.evaluation.update({
+        where: { id: evaluationId },
+        data: {
+          extractedText: ocrResult.text,
+          ocrProvider: ocrResult.provider,
+          ocrConfidence: ocrResult.confidence,
+          ocrMetadata: ocrResult.metadata,
+        },
+      });
+
+      updateProgress('ocr', 50, `Text extracted using ${ocrResult.provider} (${Math.round(ocrResult.confidence * 100)}% confidence)`);
+
+      // Get question data
+      const question = await prisma.question.findUnique({
+        where: { id: request.questionId },
+      });
+
+      if (!question) {
+        throw new Error('Question not found');
+      }
+
+      // Stage 3: AI Analysis (50-80%)
+      updateProgress('ai_analysis', 55, 'Analyzing content quality...');
+      
+      const contentAnalysis = await this.contentAnalyzer.analyzeContent(ocrResult.text, {
+        content: question.content,
+        keywords: question.keywords,
+        subject: question.subject,
+        marks: question.marks || 15,
+      });
+
+      updateProgress('ai_analysis', 65, 'Analyzing answer structure...');
+      
+      const structureAnalysis = await this.contentAnalyzer.analyzeStructure(ocrResult.text);
+
+      updateProgress('ai_analysis', 75, 'Analyzing handwriting quality...');
+      
+      const handwritingAnalysis = this.feedbackGenerator.analyzeHandwriting(
+        ocrResult,
+        imageQuality
+      );
+
+      // Stage 4: Generate Feedback (80-100%)
+      updateProgress('generating_feedback', 85, 'Generating personalized feedback...');
+      
+      // Get user profile for personalization
+      const user = await prisma.user.findUnique({
+        where: { id: request.userId },
+        include: {
+          evaluations: {
+            where: { status: 'COMPLETED' },
+            orderBy: { completedAt: 'desc' },
+            take: 5,
+          },
+        },
+      });
+
+      const userProfile = user ? {
+        name: user.name || undefined,
+        previousScores: user.evaluations.map(e => e.overallScore).filter(Boolean) as number[],
+        weakAreas: [], // Could be derived from previous evaluations
+      } : undefined;
+
+      const feedback = await this.feedbackGenerator.generateComprehensiveFeedback(
+        contentAnalysis,
+        structureAnalysis,
+        handwritingAnalysis,
+        {
+          content: question.content,
+          subject: question.subject,
+          marks: question.marks || 15,
+        },
+        userProfile
+      );
+
+      updateProgress('generating_feedback', 95, 'Finalizing evaluation...');
+
+      // Save final results
+      const processingTime = Date.now() - startTime;
+      
+      await prisma.evaluation.update({
+        where: { id: evaluationId },
+        data: {
+          contentScore: feedback.scoreBreakdown.content,
+          structureScore: feedback.scoreBreakdown.structure,
+          handwritingScore: feedback.scoreBreakdown.handwriting,
+          overallScore: feedback.scoreBreakdown.overall,
+          strengths: feedback.strengths,
+          improvements: feedback.improvements,
+          suggestions: feedback.suggestions,
+          detailedFeedback: feedback.detailedFeedback,
+          status: 'COMPLETED',
+          processingTime,
+          completedAt: new Date(),
+        },
+      });
+
+      // Update usage stats
+      await this.updateUsageStats(request.userId);
+
+      // Clean up temporary files after 24 hours
+      setTimeout(async () => {
+        try {
+          await deleteFromS3(originalImageUrl);
+          if (evaluation.processedImageUrl) {
+            await deleteFromS3(evaluation.processedImageUrl);
+          }
+        } catch (error) {
+          console.warn('Failed to clean up files:', error);
+        }
+      }, 24 * 60 * 60 * 1000); // 24 hours
+
+      updateProgress('completed', 100, 'Evaluation completed successfully!');
+
+    } catch (error) {
+      console.error('Evaluation processing failed:', error);
+      throw error;
+    }
+  }
+
+  private async handleEvaluationError(evaluationId: string, error: any): Promise<void> {
+    await prisma.evaluation.update({
+      where: { id: evaluationId },
+      data: {
+        status: 'FAILED',
+        errorMessage: error.message || 'Unknown error occurred',
+      },
+    });
+  }
+
+  private async updateUsageStats(userId: string): Promise<void> {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    await prisma.usageStats.upsert({
+      where: {
+        userId_date: {
+          userId,
+          date: today,
+        },
+      },
+      update: {
+        evaluationsCount: {
+          increment: 1,
+        },
+      },
+      create: {
+        userId,
+        date: today,
+        evaluationsCount: 1,
+      },
+    });
+  }
+
+  async getEvaluationStatus(evaluationId: string): Promise<any> {
+    return await prisma.evaluation.findUnique({
+      where: { id: evaluationId },
+      include: {
+        question: true,
+        user: {
+          select: { name: true, email: true },
+        },
+      },
+    });
+  }
+
+  async getUserEvaluations(userId: string, limit: number = 10): Promise<any[]> {
+    return await prisma.evaluation.findMany({
+      where: { userId },
+      include: { question: true },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+  }
+
+  async getEvaluationAnalytics(userId: string, days: number = 30): Promise<any> {
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+
+    const evaluations = await prisma.evaluation.findMany({
+      where: {
+        userId,
+        createdAt: { gte: startDate },
+        status: 'COMPLETED',
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return {
+      totalEvaluations: evaluations.length,
+      averageScore: evaluations.reduce((sum, e) => sum + (e.overallScore || 0), 0) / evaluations.length || 0,
+      progressTrend: evaluations.map(e => ({
+        date: e.createdAt,
+        score: e.overallScore,
+      })),
+      strongestAreas: this.calculateStrongestAreas(evaluations),
+      improvementAreas: this.calculateImprovementAreas(evaluations),
+    };
+  }
+
+  private calculateStrongestAreas(evaluations: any[]): string[] {
+    const avgScores = {
+      content: evaluations.reduce((sum, e) => sum + (e.contentScore || 0), 0) / evaluations.length || 0,
+      structure: evaluations.reduce((sum, e) => sum + (e.structureScore || 0), 0) / evaluations.length || 0,
+      handwriting: evaluations.reduce((sum, e) => sum + (e.handwritingScore || 0), 0) / evaluations.length || 0,
+    };
+
+    return Object.entries(avgScores)
+      .sort(([,a], [,b]) => b - a)
+      .map(([area]) => area);
+  }
+
+  private calculateImprovementAreas(evaluations: any[]): string[] {
+    const avgScores = {
+      content: evaluations.reduce((sum, e) => sum + (e.contentScore || 0), 0) / evaluations.length || 0,
+      structure: evaluations.reduce((sum, e) => sum + (e.structureScore || 0), 0) / evaluations.length || 0,
+      handwriting: evaluations.reduce((sum, e) => sum + (e.handwritingScore || 0), 0) / evaluations.length || 0,
+    };
+
+    return Object.entries(avgScores)
+      .sort(([,a], [,b]) => a - b)
+      .slice(0, 2)
+      .map(([area]) => area);
+  }
+}
+```
+
+---
+
+## 🎨 PHASE 4: FRONTEND & USER INTERFACE
+
+### Step 4.1: Main Evaluation Page Component
+
+Create `src/app/handwriting-evaluation/page.tsx`:
+```typescript
+'use client';
+
+import React, { useState, useCallback, useRef } from 'react';
+import { useSession } from 'next-auth/react';
+import { useRouter } from 'next/navigation';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Progress } from '@/components/ui/progress';
+import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { useToast } from '@/hooks/use-toast';
+import { ImageUploader } from '@/components/image-uploader';
+import { CameraCapture } from '@/components/camera-capture';
+import { QuestionSelector } from '@/components/question-selector';
+import { EvaluationResults } from '@/components/evaluation-results';
+import { ProgressIndicator } from '@/components/progress-indicator';
+import { PenTool, Upload, Camera, FileText, BarChart3 } from 'lucide-react';
+
+interface EvaluationState {
+  stage: 'question_selection' | 'image_upload' | 'processing' | 'results';
+  selectedQuestion?: any;
+  evaluationId?: string;
+  progress?: {
+    stage: string;
+    progress: number;
+    message: string;
+  };
+  results?: any;
+  error?: string;
+}
+
+export default function HandwritingEvaluationPage() {
+  const { data: session, status } = useSession();
+  const router = useRouter();
+  const { toast } = useToast();
+  
+  const [evaluationState, setEvaluationState] = useState<EvaluationState>({
+    stage: 'question_selection'
+  });
+  const [uploadMethod, setUploadMethod] = useState<'upload' | 'camera'>('upload');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+
+  // Redirect if not authenticated
+  if (status === 'loading') {
+    return <div>Loading...</div>;
+  }
+
+  if (status === 'unauthenticated') {
+    router.push('/auth/signin');
+    return null;
+  }
+
+  const handleQuestionSelect = (question: any) => {
+    setEvaluationState({
+      stage: 'image_upload',
+      selectedQuestion: question,
+    });
+  };
+
+  const handleImageUpload = async (file: File) => {
+    if (!evaluationState.selectedQuestion) {
+      toast({
+        variant: 'destructive',
+        title: 'No question selected',
+        description: 'Please select a question first.',
+      });
+      return;
+    }
+
+    setIsProcessing(true);
+    setEvaluationState(prev => ({ ...prev, stage: 'processing' }));
+
+    try {
+      // Upload image and start evaluation
+      const formData = new FormData();
+      formData.append('image', file);
+      formData.append('questionId', evaluationState.selectedQuestion.id);
+
+      const response = await fetch('/api/evaluations/start', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to start evaluation');
+      }
+
+      const { evaluationId } = await response.json();
+      
+      setEvaluationState(prev => ({ 
+        ...prev, 
+        evaluationId,
+        progress: {
+          stage: 'uploading',
+          progress: 0,
+          message: 'Starting evaluation...',
+        },
+      }));
+
+      // Setup WebSocket for real-time progress updates
+      setupProgressWebSocket(evaluationId);
+
+    } catch (error) {
+      console.error('Evaluation start failed:', error);
+      setEvaluationState(prev => ({
+        ...prev,
+        error: 'Failed to start evaluation. Please try again.',
+      }));
+      setIsProcessing(false);
+      toast({
+        variant: 'destructive',
+        title: 'Evaluation Failed',
+        description: 'Failed to start evaluation. Please try again.',
+      });
+    }
+  };
+
+  const setupProgressWebSocket = (evaluationId: string) => {
+    const wsUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/evaluations/${evaluationId}/progress`;
+    wsRef.current = new WebSocket(wsUrl);
+
+    wsRef.current.onmessage = (event) => {
+      const progressData = JSON.parse(event.data);
+      
+      setEvaluationState(prev => ({
+        ...prev,
+        progress: progressData,
+      }));
+
+      if (progressData.stage === 'completed') {
+        // Fetch final results
+        fetchEvaluationResults(evaluationId);
+      } else if (progressData.stage === 'failed') {
+        setEvaluationState(prev => ({
+          ...prev,
+          error: progressData.message || 'Evaluation failed',
+        }));
+        setIsProcessing(false);
+      }
+    };
+
+    wsRef.current.onerror = (error) => {
+      console.error('WebSocket error:', error);
+      setEvaluationState(prev => ({
+        ...prev,
+        error: 'Connection lost. Please refresh the page.',
+      }));
+    };
+  };
+
+  const fetchEvaluationResults = async (evaluationId: string) => {
+    try {
+      const response = await fetch(`/api/evaluations/${evaluationId}`);
+      if (!response.ok) {
+        throw new Error('Failed to fetch results');
+      }
+
+      const results = await response.json();
+      setEvaluationState(prev => ({
+        ...prev,
+        stage: 'results',
+        results,
+      }));
+      setIsProcessing(false);
+
+      // Close WebSocket connection
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+
+    } catch (error) {
+      console.error('Failed to fetch results:', error);
+      setEvaluationState(prev => ({
+        ...prev,
+        error: 'Failed to load results. Please try again.',
+      }));
+      setIsProcessing(false);
+    }
+  };
+
+  const handleStartOver = () => {
+    setEvaluationState({ stage: 'question_selection' });
+    setIsProcessing(false);
+    if (wsRef.current) {
+      wsRef.current.close();
+      wsRef.current = null;
+    }
+  };
+
+  const renderStageContent = () => {
+    switch (evaluationState.stage) {
+      case 'question_selection':
+        return (
+          <QuestionSelector
+            onQuestionSelect={handleQuestionSelect}
+            selectedSubjects={['GENERAL_STUDIES_1', 'GENERAL_STUDIES_2', 'GENERAL_STUDIES_3', 'GENERAL_STUDIES_4']}
+          />
+        );
+
+      case 'image_upload':
+        return (
+          <div className="space-y-6">
+            <Card className="glassmorphic">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <FileText className="h-5 w-5" />
+                  Selected Question
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-2">
+                  <h3 className="font-semibold">{evaluationState.selectedQuestion?.title}</h3>
+                  <p className="text-sm text-muted-foreground">
+                    {evaluationState.selectedQuestion?.content}
+                  </p>
+                  <div className="flex gap-2">
+                    <Badge variant="secondary">{evaluationState.selectedQuestion?.subject}</Badge>
+                    <Badge variant="outline">{evaluationState.selectedQuestion?.marks} marks</Badge>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="glassmorphic">
+              <CardHeader>
+                <CardTitle>Upload Your Answer</CardTitle>
+                <CardDescription>
+                  Upload a photo or scan of your handwritten answer for evaluation.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Tabs value={uploadMethod} onValueChange={(value) => setUploadMethod(value as 'upload' | 'camera')}>
+                  <TabsList className="grid w-full grid-cols-2">
+                    <TabsTrigger value="upload" className="flex items-center gap-2">
+                      <Upload className="h-4 w-4" />
+                      Upload File
+                    </TabsTrigger>
+                    <TabsTrigger value="camera" className="flex items-center gap-2">
+                      <Camera className="h-4 w-4" />
+                      Take Photo
+                    </TabsTrigger>
+                  </TabsList>
+                  
+                  <TabsContent value="upload" className="mt-4">
+                    <ImageUploader
+                      onImageUpload={handleImageUpload}
+                      maxSizeKB={10240} // 10MB
+                      acceptedFormats={['image/jpeg', 'image/png', 'application/pdf']}
+                    />
+                  </TabsContent>
+                  
+                  <TabsContent value="camera" className="mt-4">
+                    <CameraCapture
+                      onImageCapture={handleImageUpload}
+                      showQualityFeedback={true}
+                    />
+                  </TabsContent>
+                </Tabs>
+              </CardContent>
+            </Card>
+          </div>
+        );
+
+      case 'processing':
+        return (
+          <div className="space-y-6">
+            <Card className="glassmorphic">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <BarChart3 className="h-5 w-5" />
+                  Processing Your Answer
+                </CardTitle>
+                <CardDescription>
+                  Our AI is analyzing your handwritten answer. This usually takes 30-60 seconds.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {evaluationState.progress && (
+                  <ProgressIndicator
+                    stage={evaluationState.progress.stage}
+                    progress={evaluationState.progress.progress}
+                    message={evaluationState.progress.message}
+                  />
+                )}
+              </CardContent>
+            </Card>
+
+            {evaluationState.error && (
+              <Alert variant="destructive">
+                <AlertDescription>{evaluationState.error}</AlertDescription>
+              </Alert>
+            )}
+          </div>
+        );
+
+      case 'results':
+        return (
+          <EvaluationResults
+            evaluation={evaluationState.results}
+            onStartOver={handleStartOver}
+          />
+        );
+
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
+      <div className="container mx-auto px-4 py-8">
+        <div className="max-w-4xl mx-auto">
+          {/* Header */}
+          <div className="text-center mb-8">
+            <h1 className="font-headline text-4xl sm:text-5xl font-bold tracking-tighter mb-4">
+              <span className="animate-gradient-anim bg-[length:200%_auto] bg-gradient-to-r from-primary via-accent to-pink-500 bg-clip-text text-transparent">
+                Handwriting Evaluation
+              </span>
+            </h1>
+            <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
+              Get instant AI-powered feedback on your handwritten UPSC answers with detailed analysis of content, structure, and presentation.
+            </p>
+          </div>
+
+          {/* Progress Steps */}
+          <div className="mb-8">
+            <div className="flex items-center justify-between max-w-2xl mx-auto">
+              {[
+                { key: 'question_selection', label: 'Select Question', icon: FileText },
+                { key: 'image_upload', label: 'Upload Answer', icon: Upload },
+                { key: 'processing', label: 'AI Analysis', icon: BarChart3 },
+                { key: 'results', label: 'View Results', icon: PenTool },
+              ].map((step, index) => {
+                const Icon = step.icon;
+                const isActive = evaluationState.stage === step.key;
+                const isCompleted = ['question_selection', 'image_upload', 'processing'].includes(step.key) && 
+                  ['image_upload', 'processing', 'results'].includes(evaluationState.stage) &&
+                  step.key !== evaluationState.stage;
+                
+                return (
+                  <div key={step.key} className="flex flex-col items-center">
+                    <div className={`
+                      flex items-center justify-center w-10 h-10 rounded-full border-2 transition-colors
+                      ${isActive ? 'bg-primary border-primary text-primary-foreground' : 
+                        isCompleted ? 'bg-green-500 border-green-500 text-white' :
+                        'border-muted-foreground text-muted-foreground'}
+                    `}>
+                      <Icon className="h-5 w-5" />
+                    </div>
+                    <span className="text-xs mt-2 text-center">{step.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Main Content */}
+          {renderStageContent()}
+        </div>
+      </div>
+    </div>
+  );
+}
+```
+
+### Step 4.2: API Routes
+
+Create `src/app/api/evaluations/start/route.ts`:
+```typescript
+import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth-options';
+import { EvaluationService } from '@/services/evaluation-service';
+import { RateLimitService } from '@/services/rate-limit-service';
+
+const evaluationService = new EvaluationService();
+const rateLimitService = new RateLimitService();
+
+export async function POST(request: NextRequest) {
+  try {
+    // Authentication check
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    // Rate limiting check
+    const isAllowed = await rateLimitService.checkLimit(
+      session.user.id,
+      'evaluation',
+      { maxRequests: 20, windowMs: 3600000 } // 20 evaluations per hour
+    );
+
+    if (!isAllowed) {
+      return NextResponse.json(
+        { error: 'Rate limit exceeded. Please try again later.' },
+        { status: 429 }
+      );
+    }
+
+    // Parse form data
+    const formData = await request.formData();
+    const imageFile = formData.get('image') as File;
+    const questionId = formData.get('questionId') as string;
+    const preferredProvider = formData.get('preferredProvider') as string | null;
+
+    if (!imageFile || !questionId) {
+      return NextResponse.json(
+        { error: 'Missing required fields: image and questionId' },
+        { status: 400 }
+      );
+    }
+
+    // Validate file type and size
+    const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
+    if (!allowedTypes.includes(imageFile.type)) {
+      return NextResponse.json(
+        { error: 'Invalid file type. Only JPEG, PNG, and PDF are supported.' },
+        { status: 400 }
+      );
+    }
+
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    if (imageFile.size > maxSize) {
+      return NextResponse.json(
+        { error: 'File too large. Maximum size is 10MB.' },
+        { status: 400 }
+      );
+    }
+
+    // Convert file to buffer
+    const imageBuffer = Buffer.from(await imageFile.arrayBuffer());
+
+    // Start evaluation
+    const evaluationId = await evaluationService.startEvaluation({
+      userId: session.user.id,
+      questionId,
+      imageBuffer,
+      fileName: imageFile.name,
+      options: {
+        preferredOCRProvider: preferredProvider || undefined,
+        enhanceImage: true,
+        priority: 'accuracy',
+      },
+    });
+
+    return NextResponse.json({ evaluationId });
+
+  } catch (error) {
+    console.error('Evaluation start error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+```
+
+Create `src/app/api/evaluations/[id]/route.ts`:
+```typescript
+import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth-options';
+import { EvaluationService } from '@/services/evaluation-service';
+
+const evaluationService = new EvaluationService();
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const evaluation = await evaluationService.getEvaluationStatus(params.id);
+
+    if (!evaluation) {
+      return NextResponse.json({ error: 'Evaluation not found' }, { status: 404 });
+    }
+
+    // Check if user owns this evaluation
+    if (evaluation.userId !== session.user.id) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+
+    return NextResponse.json(evaluation);
+
+  } catch (error) {
+    console.error('Get evaluation error:', error);
+    return NextResponse.json(
+      { error: 'Internal server error' },
+      { status: 500 }
+    );
+  }
+}
+```
+
+Create `src/app/api/evaluations/[id]/progress/route.ts`:
+```typescript
+import { NextRequest } from 'next/server';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth-options';
+
+// WebSocket upgrade handler for real-time progress updates
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return new Response('Unauthorized', { status: 401 });
+    }
+
+    // Check if this is a WebSocket upgrade request
+    const upgrade = request.headers.get('upgrade');
+    if (upgrade !== 'websocket') {
+      return new Response('Expected websocket', { status: 400 });
+    }
+
+    // In a real implementation, you would:
+    // 1. Upgrade the connection to WebSocket
+    // 2. Subscribe to Redis/database changes for this evaluation ID
+    // 3. Send real-time updates to the client
+    
+    // For now, return a placeholder response
+    return new Response('WebSocket upgrade not implemented in this example', { status: 501 });
+
+  } catch (error) {
+    console.error('WebSocket connection error:', error);
+    return new Response('Internal server error', { status: 500 });
+  }
+}
+```
+
+---
