@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Backend Manager</title>
+<style>
+ body { font-family: Arial, sans-serif; margin: 2rem; }
+ label { display: block; margin-top: 1rem; }
+</style>
+</head>
+<body>
+<h1>Backend Manager</h1>
+<form id="start-form">
+ <label>Question ID: <input type="text" id="questionId" required></label>
+ <label>Preferred OCR Provider: <input type="text" id="provider" placeholder="optional"></label>
+ <label>Image: <input type="file" id="image" accept="image/*,application/pdf" required></label>
+ <button type="submit">Start Evaluation</button>
+</form>
+<div id="result" style="margin-top:1rem;"></div>
+<script>
+const form = document.getElementById('start-form');
+const resultDiv = document.getElementById('result');
+let evaluationId = '';
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  resultDiv.textContent = 'Starting evaluation...';
+  const fd = new FormData();
+  fd.append('questionId', document.getElementById('questionId').value);
+  fd.append('preferredProvider', document.getElementById('provider').value);
+  fd.append('image', document.getElementById('image').files[0]);
+  const res = await fetch('/api/evaluations/start', { method: 'POST', body: fd });
+  if (!res.ok) {
+    resultDiv.textContent = 'Error starting evaluation';
+    return;
+  }
+  const data = await res.json();
+  evaluationId = data.evaluationId;
+  resultDiv.textContent = 'Evaluation ID: ' + evaluationId;
+  pollStatus();
+});
+async function pollStatus() {
+  if (!evaluationId) return;
+  const interval = setInterval(async () => {
+    const res = await fetch(`/api/evaluations/${evaluationId}`);
+    if (!res.ok) {
+      clearInterval(interval);
+      resultDiv.textContent = 'Error fetching status';
+      return;
+    }
+    const data = await res.json();
+    resultDiv.textContent = JSON.stringify(data, null, 2);
+    if (data.status === 'COMPLETED' || data.status === 'FAILED') {
+      clearInterval(interval);
+    }
+  }, 3000);
+}
+</script>
+</body>
+</html>
